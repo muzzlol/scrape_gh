@@ -90,7 +90,12 @@ def _convert_issue_to_markdown(data):
     if data["related_items"]:
         md += "## Related Items\n\n"
         for item in data["related_items"]:
-            md += f"* {item}\n"
+            md += f"* {item['reference']}\n"
+            if item.get("content"):
+                md += "  <details>\n"
+                md += "  <summary>View related content</summary>\n\n"
+                md += "  " + _convert_related_content_to_markdown(item["content"]).replace("\n", "\n  ") + "\n"
+                md += "  </details>\n"
     
     return md
 
@@ -130,7 +135,59 @@ def _convert_pr_to_markdown(data):
     if data["related_items"]:
         md += "## Related Items\n\n"
         for item in data["related_items"]:
-            md += f"* {item}\n"
+            md += f"* {item['reference']}\n"
+            if item.get("content"):
+                md += "  <details>\n"
+                md += "  <summary>View related content</summary>\n\n"
+                md += "  " + _convert_related_content_to_markdown(item["content"]).replace("\n", "\n  ") + "\n"
+                md += "  </details>\n"
+    
+    return md
+
+def _convert_related_content_to_markdown(content):
+    """Convert related content to Markdown"""
+    if content["type"] == "issue":
+        md = f"### Issue #{content['number']}: {content['title']}\n\n"
+        md += f"**State:** {content['state']}  \n"
+        md += f"**Author:** {content['author']}  \n"
+        md += f"**Created:** {content['created_at']}  \n\n"
+        
+        md += "#### Description\n\n"
+        md += f"{content['description']}\n\n"
+        
+        if content["conversation"]:
+            md += "#### Conversation\n\n"
+            for comment in content["conversation"][:3]:  # Limit to first 3 comments
+                md += f"{comment}\n\n---\n\n"
+            if len(content["conversation"]) > 3:
+                md += f"*...and {len(content['conversation']) - 3} more comments*\n\n"
+    else:  # PR
+        md = f"### Pull Request #{content['number']}: {content['title']}\n\n"
+        md += f"**State:** {content['state']}  \n"
+        md += f"**Author:** {content['author']}  \n"
+        md += f"**Created:** {content['created_at']}  \n"
+        if content.get("merged_at"):
+            md += f"**Merged:** {content['merged_at']}  \n\n"
+        else:
+            md += "\n"
+        
+        md += "#### Description\n\n"
+        md += f"{content['description']}\n\n"
+        
+        if content["conversation"]:
+            md += "#### Conversation\n\n"
+            for comment in content["conversation"][:3]:  # Limit to first 3 comments
+                md += f"{comment}\n\n---\n\n"
+            if len(content["conversation"]) > 3:
+                md += f"*...and {len(content['conversation']) - 3} more comments*\n\n"
+        
+        if content["commits"]:
+            md += "#### Commits\n\n"
+            for commit in content["commits"][:5]:  # Limit to first 5 commits
+                md += f"* {commit}\n"
+            if len(content["commits"]) > 5:
+                md += f"*...and {len(content['commits']) - 5} more commits*\n\n"
+            md += "\n"
     
     return md
 
