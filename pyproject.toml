@@ -1,0 +1,10 @@
+[project]
+name = "scrape-gh"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "firecrawl-py>=1.13.5",
+    "python-dotenv>=1.0.1",
+]
