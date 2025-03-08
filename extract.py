@@ -81,7 +81,6 @@ class RelatedItem(BaseModel):
     sha: Optional[str] = Field(description="SHA of the commit", default=None)
     title: Optional[str] = Field(description="Title of the PR or issue", default=None)
     url: str = Field(description="URL to the item")
-    content: Optional[Dict[str, Any]] = Field(description="Extracted content of the related item", default=None)
 
 class GitHubIssue(BaseModel):
     """Model for GitHub issue"""
@@ -215,7 +214,7 @@ def extract_content(url: str) -> Union[GitHubIssue, GitHubPR]:
     else:
         raise ValueError("URL must point to a GitHub issue or pull request")
 
-def extract_content_with_related(url: str, max_depth: int = 1, include_types: List[str] = None, visited_urls: Set[str] = None) -> Union[GitHubIssue, GitHubPR]:
+def extract_content_with_related(url: str, max_depth: int = 1, include_types: List[str] = None, visited_urls: Set[str] = None) -> Dict[str, Any]:
     """
     Extract content from a GitHub issue or pull request, including related items up to a specified depth.
     
@@ -226,12 +225,11 @@ def extract_content_with_related(url: str, max_depth: int = 1, include_types: Li
         visited_urls: Set of URLs already visited to prevent cycles (default: empty set)
         
     Returns:
-        Union[GitHubIssue, GitHubPR]: Structured data from the issue or pull request with related items
+        Dict[str, Any]: Formatted content from the issue or pull request with related items
     """
     if visited_urls is None:
         visited_urls = set()
     
-    # Edge case for when depth is <1 and related items have og url in thier related items
     if url in visited_urls:
         return None
     
@@ -239,19 +237,30 @@ def extract_content_with_related(url: str, max_depth: int = 1, include_types: Li
     
     # Extract content from the URL
     content = extract_content(url)
+    formatted_content = format_for_llm(content)
     
     # Stop recursion if we've reached the maximum depth
     if max_depth <= 0:
-        return content
+        return formatted_content
     
     # Process related items
-    for i, item in enumerate(content.related_items):
+    related_with_content = []
+    
+    for item in content.related_items:
         # Skip if we're filtering by type and this type is not included
         if include_types and item.type not in include_types:
+            related_with_content.append({
+                "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
+                "content": None
+            })
             continue
         
         # Skip if we've already visited this URL
         if item.url in visited_urls:
+            related_with_content.append({
+                "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url}) [already visited]",
+                "content": None
+            })
             continue
         
         try:
@@ -263,13 +272,21 @@ def extract_content_with_related(url: str, max_depth: int = 1, include_types: Li
                 visited_urls=visited_urls
             )
             
-            if related_content:
-                # Store the formatted content in the related item
-                content.related_items[i].content = format_for_llm(related_content)
+            related_with_content.append({
+                "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
+                "content": related_content
+            })
         except Exception as e:
             print(f"Error extracting content from {item.url}: {str(e)}")
+            related_with_content.append({
+                "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url}) [error: {str(e)}]",
+                "content": None
+            })
     
-    return content
+    # Replace the related_items in the formatted content with the enhanced version
+    formatted_content["related_items"] = related_with_content
+    
+    return formatted_content
 
 def format_for_llm(content: Union[GitHubIssue, GitHubPR]) -> Dict[str, Any]:
     """
@@ -298,7 +315,7 @@ def format_for_llm(content: Union[GitHubIssue, GitHubPR]) -> Dict[str, Any]:
             "related_items": [
                 {
                     "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
-                    "content": item.content
+                    "content": None  # This will be filled by extract_content_with_related if needed
                 }
                 for item in content.related_items
             ] if content.related_items else []
@@ -334,7 +351,7 @@ def format_for_llm(content: Union[GitHubIssue, GitHubPR]) -> Dict[str, Any]:
             "related_items": [
                 {
                     "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
-                    "content": item.content
+                    "content": None  # This will be filled by extract_content_with_related if needed
                 }
                 for item in content.related_items
             ] if content.related_items else []

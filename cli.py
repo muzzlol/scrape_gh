@@ -22,18 +22,19 @@ def main():
         # Extract content from the GitHub URL
         if args.depth > 0:
             print(f"Extracting content from {args.url} with related items (depth: {args.depth})...")
-            content = extract_content_with_related(args.url, max_depth=args.depth, include_types=args.types)
+            # extract_content_with_related already returns formatted content
+            output_data = extract_content_with_related(args.url, max_depth=args.depth, include_types=args.types)
         else:
             print(f"Extracting content from {args.url}...")
             content = extract_content(args.url)
-        
-        # Process the content based on the requested format
-        if args.raw:
-            # Use the raw model output
-            output_data = content.model_dump()
-        else:
-            # Format for LLM consumption
-            output_data = format_for_llm(content)
+            
+            # Process the content based on the requested format
+            if args.raw:
+                # Use the raw model output
+                output_data = content.model_dump()
+            else:
+                # Format for LLM consumption
+                output_data = format_for_llm(content)
         
         # Convert to the requested format
         if args.format == "json":
@@ -57,6 +58,8 @@ def main():
         sys.exit(1)
     except Exception as e:
         print(f"Unexpected error: {str(e)}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         sys.exit(3)
 
 def convert_to_markdown(data):
