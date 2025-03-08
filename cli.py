@@ -2,7 +2,7 @@
 import argparse
 import json
 import sys
-from extract import extract_content, extract_content_with_related, format_for_llm
+from extract import extract_content, extract_content_with_related, format_for_llm, FirecrawlError
 
 def main():
     parser = argparse.ArgumentParser(description="Extract content from GitHub issues and PRs for LLM consumption")
@@ -49,9 +49,15 @@ def main():
         else:
             print(output_str)
         
-    except Exception as e:
-        print(f"Error: {str(e)}", file=sys.stderr)
+    except FirecrawlError as e:
+        print(f"Firecrawl Error: {str(e)}", file=sys.stderr)
+        sys.exit(2)
+    except ValueError as e:
+        print(f"Invalid URL: {str(e)}", file=sys.stderr)
         sys.exit(1)
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}", file=sys.stderr)
+        sys.exit(3)
 
 def convert_to_markdown(data):
     """Convert the formatted data to Markdown"""

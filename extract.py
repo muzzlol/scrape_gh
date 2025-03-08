@@ -1,12 +1,53 @@
 from firecrawl import FirecrawlApp
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Set
+import time
+from functools import wraps
 
 load_dotenv()
 
 # Initialize Firecrawl
 app = FirecrawlApp()
+
+def retry_on_error(max_retries=3, initial_delay=1):
+    """
+    Decorator to retry a function on failure with exponential backoff.
+    
+    Args:
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay between retries in seconds
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            delay = initial_delay
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    if attempt == max_retries:
+                        break
+                    
+                    # Print informative message about the retry
+                    print(f"Attempt {attempt + 1}/{max_retries + 1} failed: {str(e)}")
+                    print(f"Retrying in {delay} seconds...")
+                    
+                    time.sleep(delay)
+                    delay *= 2  # Exponential backoff
+            
+            # If we get here, all retries failed
+            raise FirecrawlError(f"All {max_retries + 1} attempts failed. Last error: {str(last_exception)}")
+        
+        return wrapper
+    return decorator
+
+class FirecrawlError(Exception):
+    """Custom exception for Firecrawl-related errors"""
+    pass
 
 # Define data models
 class Comment(BaseModel):
@@ -71,6 +112,7 @@ class GitHubPR(BaseModel):
     labels: List[str] = Field(description="Labels attached to the PR")
     related_items: List[RelatedItem] = Field(description="Related PRs, issues, or commits", default_factory=list)
 
+@retry_on_error()
 def extract_issue(url: str) -> GitHubIssue:
     """
     Extract content from a GitHub issue.
@@ -80,17 +122,36 @@ def extract_issue(url: str) -> GitHubIssue:
         
     Returns:
         GitHubIssue: Structured data from the issue
+        
+    Raises:
+        FirecrawlError: If extraction fails after all retries
     """
-    result = app.extract(
-        urls=[url],
-        params={
-            "prompt": "Extract GitHub issue information based on the schema provided.",
-            "schema": GitHubIssue.model_json_schema(),
-        },
-    )
-    
-    return GitHubIssue(**result["data"])
+    try:
+        result = app.extract(
+            urls=[url],
+            params={
+                "prompt": "Extract GitHub issue information based on the schema provided.",
+                "schema": GitHubIssue.model_json_schema(),
+            },
+        )
+        
+        if not result or "data" not in result:
+            raise FirecrawlError(f"Invalid response from Firecrawl for {url}")
+        
+        return GitHubIssue(**result["data"])
+    except Exception as e:
+        if "500" in str(e):
+            raise FirecrawlError(f"Firecrawl service error (500). This might be temporary, please try again in a few minutes. URL: {url}")
+        elif "429" in str(e):
+            raise FirecrawlError(f"Rate limit exceeded. Please wait a few minutes before trying again. URL: {url}")
+        elif "403" in str(e):
+            raise FirecrawlError(f"Access forbidden. Please check your API key and permissions. URL: {url}")
+        elif "404" in str(e):
+            raise FirecrawlError(f"Issue not found or private. Please check the URL and your permissions: {url}")
+        else:
+            raise FirecrawlError(f"Error extracting issue: {str(e)}")
 
+@retry_on_error()
 def extract_pr(url: str) -> GitHubPR:
     """
     Extract content from a GitHub pull request.
@@ -100,16 +161,34 @@ def extract_pr(url: str) -> GitHubPR:
         
     Returns:
         GitHubPR: Structured data from the pull request
+        
+    Raises:
+        FirecrawlError: If extraction fails after all retries
     """
-    result = app.extract(
-        urls=[url],
-        params={
-            "prompt": "Extract GitHub pull request information including comments, commits, and file changes based on the schema provided.",
-            "schema": GitHubPR.model_json_schema(),
-        },
-    )
-    
-    return GitHubPR(**result["data"])
+    try:
+        result = app.extract(
+            urls=[url],
+            params={
+                "prompt": "Extract GitHub pull request information including comments, commits, and file changes based on the schema provided.",
+                "schema": GitHubPR.model_json_schema(),
+            },
+        )
+        
+        if not result or "data" not in result:
+            raise FirecrawlError(f"Invalid response from Firecrawl for {url}")
+        
+        return GitHubPR(**result["data"])
+    except Exception as e:
+        if "500" in str(e):
+            raise FirecrawlError(f"Firecrawl service error (500). This might be temporary, please try again in a few minutes. URL: {url}")
+        elif "429" in str(e):
+            raise FirecrawlError(f"Rate limit exceeded. Please wait a few minutes before trying again. URL: {url}")
+        elif "403" in str(e):
+            raise FirecrawlError(f"Access forbidden. Please check your API key and permissions. URL: {url}")
+        elif "404" in str(e):
+            raise FirecrawlError(f"PR not found or private. Please check the URL and your permissions: {url}")
+        else:
+            raise FirecrawlError(f"Error extracting PR: {str(e)}")
 
 def extract_content(url: str) -> Union[GitHubIssue, GitHubPR]:
     """
