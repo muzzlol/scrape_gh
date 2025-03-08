@@ -2,7 +2,7 @@
 import argparse
 import json
 import sys
-from extract import extract_content, format_for_llm
+from extract import extract_content, extract_content_with_related, format_for_llm
 
 def main():
     parser = argparse.ArgumentParser(description="Extract content from GitHub issues and PRs for LLM consumption")
@@ -11,12 +11,21 @@ def main():
     parser.add_argument("-r", "--raw", action="store_true", help="Output raw extracted data without LLM formatting")
     parser.add_argument("-f", "--format", choices=["json", "markdown"], default="json", 
                         help="Output format (default: json)")
+    parser.add_argument("-d", "--depth", type=int, default=0, 
+                        help="Maximum depth for recursive extraction of related items (default: 0, no recursion)")
+    parser.add_argument("-t", "--types", nargs="+", choices=["PR", "issue", "commit"], 
+                        help="Types of related items to include (default: all types)")
     
     args = parser.parse_args()
     
     try:
         # Extract content from the GitHub URL
-        content = extract_content(args.url)
+        if args.depth > 0:
+            print(f"Extracting content from {args.url} with related items (depth: {args.depth})...")
+            content = extract_content_with_related(args.url, max_depth=args.depth, include_types=args.types)
+        else:
+            print(f"Extracting content from {args.url}...")
+            content = extract_content(args.url)
         
         # Process the content based on the requested format
         if args.raw:

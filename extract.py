@@ -40,6 +40,7 @@ class RelatedItem(BaseModel):
     sha: Optional[str] = Field(description="SHA of the commit", default=None)
     title: Optional[str] = Field(description="Title of the PR or issue", default=None)
     url: str = Field(description="URL to the item")
+    content: Optional[Dict[str, Any]] = Field(description="Extracted content of the related item", default=None)
 
 class GitHubIssue(BaseModel):
     """Model for GitHub issue"""
@@ -119,14 +120,77 @@ def extract_content(url: str) -> Union[GitHubIssue, GitHubPR]:
         
     Returns:
         Union[GitHubIssue, GitHubPR]: Structured data from the issue or pull request
+        
+    Raises:
+        FirecrawlError: If extraction fails
+        ValueError: If the URL is not a valid GitHub issue or PR URL
     """
+    if not url.startswith("https://github.com/"):
+        raise ValueError("URL must be a GitHub URL")
+    
     # Determine if the URL is for an issue or a PR
     if "/pull/" in url:
         return extract_pr(url)
     elif "/issues/" in url:
         return extract_issue(url)
     else:
-        raise ValueError("URL must be a GitHub issue or pull request URL")
+        raise ValueError("URL must point to a GitHub issue or pull request")
+
+def extract_content_with_related(url: str, max_depth: int = 1, include_types: List[str] = None, visited_urls: Set[str] = None) -> Union[GitHubIssue, GitHubPR]:
+    """
+    Extract content from a GitHub issue or pull request, including related items up to a specified depth.
+    
+    Args:
+        url: URL to the GitHub issue or pull request
+        max_depth: Maximum depth for recursive extraction of related items (default: 1)
+        include_types: List of related item types to include (default: all types)
+        visited_urls: Set of URLs already visited to prevent cycles (default: empty set)
+        
+    Returns:
+        Union[GitHubIssue, GitHubPR]: Structured data from the issue or pull request with related items
+    """
+    if visited_urls is None:
+        visited_urls = set()
+    
+    # Edge case for when depth is <1 and related items have og url in thier related items
+    if url in visited_urls:
+        return None
+    
+    visited_urls.add(url)
+    
+    # Extract content from the URL
+    content = extract_content(url)
+    
+    # Stop recursion if we've reached the maximum depth
+    if max_depth <= 0:
+        return content
+    
+    # Process related items
+    for i, item in enumerate(content.related_items):
+        # Skip if we're filtering by type and this type is not included
+        if include_types and item.type not in include_types:
+            continue
+        
+        # Skip if we've already visited this URL
+        if item.url in visited_urls:
+            continue
+        
+        try:
+            # Recursively extract content from the related item
+            related_content = extract_content_with_related(
+                item.url, 
+                max_depth=max_depth-1, 
+                include_types=include_types,
+                visited_urls=visited_urls
+            )
+            
+            if related_content:
+                # Store the formatted content in the related item
+                content.related_items[i].content = format_for_llm(related_content)
+        except Exception as e:
+            print(f"Error extracting content from {item.url}: {str(e)}")
+    
+    return content
 
 def format_for_llm(content: Union[GitHubIssue, GitHubPR]) -> Dict[str, Any]:
     """
@@ -153,7 +217,10 @@ def format_for_llm(content: Union[GitHubIssue, GitHubPR]) -> Dict[str, Any]:
             ],
             "labels": content.labels,
             "related_items": [
-                f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})"
+                {
+                    "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
+                    "content": item.content
+                }
                 for item in content.related_items
             ] if content.related_items else []
         }
@@ -186,12 +253,11 @@ def format_for_llm(content: Union[GitHubIssue, GitHubPR]) -> Dict[str, Any]:
             ],
             "labels": content.labels,
             "related_items": [
-                f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})"
+                {
+                    "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
+                    "content": item.content
+                }
                 for item in content.related_items
             ] if content.related_items else []
         }
 
-content = extract_content("https://github.com/huggingface/transformers/issues/36564")
-
-# Format the content for LLM consumption
-formatted_content = format_for_llm(content)
