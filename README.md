@@ -39,6 +39,11 @@ Then edit `.env` and replace `your_api_key_here` with your actual Firecrawl API 
 
 ### Command Line
 
+### Command Line
+
+Note: If you're using uv, replace `python` with `uv run` in the following commands.
+
+
 Extract content from a GitHub issue or PR:
 
 ```
