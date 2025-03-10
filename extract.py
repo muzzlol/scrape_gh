@@ -10,6 +10,25 @@ load_dotenv()
 # Initialize Firecrawl
 app = FirecrawlApp()
 
+def get_da_diff(url: str):
+    import requests
+    import re
+
+    match = re.match(r"https://github\.com/([^/]+/[^/]+)/pull/(\d+)", url)
+    if not match:
+        raise ValueError("Invalid GitHub pull request URL")
+    path, pr_num = match.groups()
+    diff_url = f"http://patch-diff.githubusercontent.com/raw/{path}/pull/{pr_num}.diff"
+
+    resp = requests.get(diff_url)
+    if not resp.ok:
+        raise ValueError(f"Failed to retrieve diff: {resp.text}")
+    # print(resp.text)
+    return resp.text
+
+get_da_diff("https://github.com/kubeflow/pipelines/pull/11628")
+
+
 def retry_on_error(max_retries=3, initial_delay=1):
     """
     Decorator to retry a function on failure with exponential backoff.
@@ -59,26 +78,15 @@ class Comment(BaseModel):
 
 class Commit(BaseModel):
     """Model for GitHub commit"""
-    sha: str = Field(description="The commit SHA")
     message: str = Field(description="The commit message")
     author: str = Field(description="GitHub username of the commit author")
     created_at: str = Field(description="Timestamp when the commit was created")
     url: str = Field(description="URL to the commit")
 
-class FileChange(BaseModel):
-    """Model for file changes in a PR"""
-    filename: str = Field(description="Name of the file that was changed")
-    status: str = Field(description="Status of the change (added, modified, removed)")
-    additions: int = Field(description="Number of lines added")
-    deletions: int = Field(description="Number of lines deleted")
-    changes: int = Field(description="Total number of changes")
-    patch: Optional[str] = Field(description="Diff patch showing the actual changes", default=None)
-
 class RelatedItem(BaseModel):
     """Model for related PRs, issues, or commits"""
     type: str = Field(description="Type of item (PR, issue, or commit)")
     number: Optional[int] = Field(description="Number of the PR or issue", default=None)
-    sha: Optional[str] = Field(description="SHA of the commit", default=None)
     title: Optional[str] = Field(description="Title of the PR or issue", default=None)
     url: str = Field(description="URL to the item")
 
@@ -90,7 +98,6 @@ class GitHubIssue(BaseModel):
     author: str = Field(description="GitHub username of the issue creator")
     created_at: str = Field(description="Timestamp when the issue was created")
     updated_at: str = Field(description="Timestamp when the issue was last updated")
-    body: str = Field(description="Description of the issue")
     comments: List[Comment] = Field(description="Comments on the issue")
     labels: List[str] = Field(description="Labels attached to the issue")
     related_items: List[RelatedItem] = Field(description="Related PRs, issues, or commits", default_factory=list)
@@ -104,12 +111,11 @@ class GitHubPR(BaseModel):
     created_at: str = Field(description="Timestamp when the PR was created")
     updated_at: str = Field(description="Timestamp when the PR was last updated")
     merged_at: Optional[str] = Field(description="Timestamp when the PR was merged", default=None)
-    body: str = Field(description="Description of the PR")
     comments: List[Comment] = Field(description="Comments on the PR")
     commits: List[Commit] = Field(description="Commits in the PR")
-    file_changes: List[FileChange] = Field(description="File changes in the PR")
+    file_changes: Optional[str] = None
     labels: List[str] = Field(description="Labels attached to the PR")
-    related_items: List[RelatedItem] = Field(description="Related PRs, issues, or commits", default_factory=list)
+    related_items: List[RelatedItem] = Field(description="Related PRs, issues, or commits. issues can be mentioned in title of PR as fixes #xyz where xyz is issue number", default_factory=list)
 
 @retry_on_error()
 def extract_issue(url: str) -> GitHubIssue:
@@ -175,6 +181,9 @@ def extract_pr(url: str) -> GitHubPR:
         
         if not result or "data" not in result:
             raise FirecrawlError(f"Invalid response from Firecrawl for {url}")
+        
+        diff_content = get_da_diff(url)
+        result["data"]["file_changes"] = diff_content
         
         return GitHubPR(**result["data"])
     except Exception as e:
@@ -250,7 +259,7 @@ def extract_content_with_related(url: str, max_depth: int = 1, include_types: Li
         # Skip if we're filtering by type and this type is not included
         if include_types and item.type not in include_types:
             related_with_content.append({
-                "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
+                "reference": f"{item.type} {item.number}: {item.title or ''} ({item.url})",
                 "content": None
             })
             continue
@@ -258,7 +267,7 @@ def extract_content_with_related(url: str, max_depth: int = 1, include_types: Li
         # Skip if we've already visited this URL
         if item.url in visited_urls:
             related_with_content.append({
-                "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url}) [already visited]",
+                "reference": f"{item.type} {item.number}: {item.title or ''} ({item.url}) [already visited]",
                 "content": None
             })
             continue
@@ -273,13 +282,13 @@ def extract_content_with_related(url: str, max_depth: int = 1, include_types: Li
             )
             
             related_with_content.append({
-                "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
+                "reference": f"{item.type} {item.number}: {item.title or ''} ({item.url})",
                 "content": related_content
             })
         except Exception as e:
             print(f"Error extracting content from {item.url}: {str(e)}")
             related_with_content.append({
-                "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url}) [error: {str(e)}]",
+                "reference": f"{item.type} {item.number}: {item.title or ''} ({item.url}) [error: {str(e)}]",
                 "content": None
             })
     
@@ -306,7 +315,6 @@ def format_for_llm(content: Union[GitHubIssue, GitHubPR]) -> Dict[str, Any]:
             "state": content.state,
             "author": content.author,
             "created_at": content.created_at,
-            "description": content.body,
             "conversation": [
                 f"**{comment.author}** ({comment.created_at}):\n{comment.content}"
                 for comment in content.comments
@@ -314,7 +322,7 @@ def format_for_llm(content: Union[GitHubIssue, GitHubPR]) -> Dict[str, Any]:
             "labels": content.labels,
             "related_items": [
                 {
-                    "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
+                    "reference": f"{item.type} {item.number}: {item.title or ''} ({item.url})",
                     "content": None  # This will be filled by extract_content_with_related if needed
                 }
                 for item in content.related_items
@@ -329,31 +337,21 @@ def format_for_llm(content: Union[GitHubIssue, GitHubPR]) -> Dict[str, Any]:
             "author": content.author,
             "created_at": content.created_at,
             "merged_at": content.merged_at,
-            "description": content.body,
             "conversation": [
                 f"**{comment.author}** ({comment.created_at}):\n{comment.content}"
                 for comment in content.comments
             ],
             "commits": [
-                f"{commit.sha[:7]}: {commit.message} (by {commit.author} on {commit.created_at})"
+                f"{commit.message} (by {commit.author} on {commit.created_at})"
                 for commit in content.commits
             ],
-            "file_changes": [
-                {
-                    "filename": change.filename,
-                    "status": change.status,
-                    "changes": f"+{change.additions} -{change.deletions}",
-                    "patch": change.patch
-                }
-                for change in content.file_changes
-            ],
+            "file_changes": content.file_changes,  # This is a raw string from get_da_diff()
             "labels": content.labels,
             "related_items": [
                 {
-                    "reference": f"{item.type} {item.number or item.sha}: {item.title or ''} ({item.url})",
+                    "reference": f"{item.type} {item.number}: {item.title or ''} ({item.url})",
                     "content": None  # This will be filled by extract_content_with_related if needed
                 }
                 for item in content.related_items
             ] if content.related_items else []
         }
-
